@@ -4,6 +4,7 @@ import asyncio
 from aiogram import Bot, Dispatcher, types
 from aiogram.enums import ParseMode
 from aiogram.client.default import DefaultBotProperties
+from aiogram.types import InlineKeyboardMarkup, InlineKeyboardButton
 from dotenv import load_dotenv
 
 load_dotenv()  # Загружаем переменные из .env
@@ -71,9 +72,24 @@ async def handle_message(message: types.Message):
         else:
             await bot.send_message(GROUP_CHAT_ID, order_text, parse_mode=ParseMode.HTML)
 
+        # Создание кнопки "Подать ещё одну заявку"
+        keyboard = InlineKeyboardMarkup()
+        keyboard.add(
+            InlineKeyboardButton("Подать ещё одну заявку", callback_data="new_order")
+        )
+
         await message.reply(
             "✅ Ваша заявка обрабатывается!\n\n"
-            "Вы можете продолжить выбирать товары в каталоге: https://a.wsxc.cn/ItS5XIV"
+            "Вы можете продолжить выбирать товары в каталоге: https://a.wsxc.cn/ItS5XIV",
+            reply_markup=keyboard,
+        )
+
+
+@dp.callback_query()
+async def process_callback(callback_query: types.CallbackQuery):
+    if callback_query.data == "new_order":
+        await bot.send_message(
+            callback_query.from_user.id, "📌 Отправьте новую заявку в том же формате."
         )
 
 
