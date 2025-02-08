@@ -73,7 +73,7 @@ async def handle_message(message: types.Message):
 
         await message.reply(
             "✅ Ваша заявка обрабатывается!\n\n"
-            "Вы можете продолжить выбирать товары в каталоге: [Открыть каталог](https://a.wsxc.cn/ItS5XIV)"
+            "Вы можете продолжить выбирать товары в каталоге: https://a.wsxc.cn/ItS5XIV"
         )
 
 
