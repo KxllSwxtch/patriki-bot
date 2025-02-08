@@ -1,11 +1,10 @@
 import os
 import logging
-import sqlite3
+import asyncio
 from aiogram import Bot, Dispatcher, types
-from aiogram.types import ParseMode
-from aiogram.utils import executor
+from aiogram.enums import ParseMode
+from aiogram.client.default import DefaultBotProperties
 from dotenv import load_dotenv
-
 
 load_dotenv()  # Загружаем переменные из .env
 
@@ -13,7 +12,7 @@ load_dotenv()  # Загружаем переменные из .env
 TOKEN = os.getenv("BOT_TOKEN")
 
 # ID группы, куда бот будет отправлять заявки
-GROUP_CHAT_ID = os.getenv("GROUP_CHAT_ID")  # Заменить на реальный ID группы
+GROUP_CHAT_ID = int(os.getenv("GROUP_CHAT_ID"))  # Убедимся, что ID - это число
 
 # ID администратора (клиент и его напарник)
 ADMIN_IDS = {123456789, 987654321}  # Заменить на реальные Telegram ID
@@ -22,76 +21,63 @@ ADMIN_IDS = {123456789, 987654321}  # Заменить на реальные Tel
 logging.basicConfig(level=logging.INFO)
 
 # Инициализация бота и диспетчера
-bot = Bot(token=TOKEN, parse_mode=ParseMode.HTML)
-dp = Dispatcher(bot)
-
-# Подключение к базе данных
-conn = sqlite3.connect("orders.db")
-cursor = conn.cursor()
-cursor.execute(
-    """CREATE TABLE IF NOT EXISTS orders (
-                    id INTEGER PRIMARY KEY AUTOINCREMENT,
-                    user_id INTEGER,
-                    username TEXT,
-                    order_text TEXT,
-                    created_at DATETIME DEFAULT CURRENT_TIMESTAMP)"""
-)
-conn.commit()
+bot = Bot(token=TOKEN, default=DefaultBotProperties(parse_mode=ParseMode.HTML))
+dp = Dispatcher()
 
 
-@dp.message_handler(commands=["start"])
-async def start(message: types.Message):
-    await message.reply(
-        "Привет! Отправьте заявку в формате:\n\n"
-        "#название_товара\nРазмеры: XX-YY-ZZ\nЦена от 23.000₽\nСсылка на каталог"
-    )
-
-
-@dp.message_handler(commands=["заявки"])
-async def show_orders(message: types.Message):
-    if message.from_user.id not in ADMIN_IDS:
-        await message.reply("У вас нет доступа к просмотру заявок.")
-        return
-
-    cursor.execute(
-        "SELECT order_text, created_at FROM orders ORDER BY created_at DESC LIMIT 10"
-    )
-    orders = cursor.fetchall()
-
-    if not orders:
-        await message.reply("Нет активных заявок.")
-    else:
-        text = "Последние заявки:\n\n" + "\n".join(
-            [f"{o[1]}\n{o[0]}\n" for o in orders]
+@dp.message()
+async def handle_message(message: types.Message):
+    if message.text and message.text.startswith("/start"):
+        await message.reply(
+            "Привет! 👋 Добро пожаловать!\n\n"
+            "📌 Для оформления заявки отправьте:\n"
+            "- Фото товара или ссылку на него\n"
+            "- Ваше имя\n"
+            "- Ваш номер телефона или Telegram\n\n"
+            "📷 Вы также можете прикрепить фото к заявке!\n\n"
+            "🛍 **Каталог товаров:** [Открыть каталог](https://a.wsxc.cn/ItS5XIV)"
         )
-        await message.reply(text)
-
-
-@dp.message_handler()
-async def handle_order(message: types.Message):
-    # Проверяем, есть ли в тексте ключевые слова
-    if (
-        "#" not in message.text
-        or "Цена" not in message.text
-        or "КАТАЛОГ" not in message.text
+    elif (
+        message.text
+        and message.text.startswith("/заявки")
+        and message.from_user.id in ADMIN_IDS
     ):
-        await message.reply("Формат заявки неверный!\nПопробуйте снова по примеру:")
-        return
+        await message.reply("Сохранение заявок в базе данных временно отключено.")
+    elif message.text or message.photo:
+        order_text = message.caption if message.caption else message.text
+        photo_id = message.photo[-1].file_id if message.photo else None
 
-    # Сохранение в базу данных
-    cursor.execute(
-        "INSERT INTO orders (user_id, username, order_text) VALUES (?, ?, ?)",
-        (message.from_user.id, message.from_user.username, message.text),
-    )
-    conn.commit()
+        if not (
+            order_text
+            and any(x in order_text.lower() for x in ["имя", "телефон", "@", "tg"])
+        ):
+            await message.reply(
+                "Формат заявки неверный!\n\nПример:\n"
+                "https://example.com/product\n"
+                "Имя: Иван Иванов\n"
+                "Телефон/Telegram: @ivanivanov\n\n"
+                "🛍 **Каталог товаров:** [Открыть каталог](https://a.wsxc.cn/ItS5XIV)"
+            )
+            return
 
-    # Отправка заявки в группу
-    order_text = f"<b>Новая заявка:</b>\n{message.text}\n\nОт: @{message.from_user.username if message.from_user.username else message.from_user.id}"
-    await bot.send_message(GROUP_CHAT_ID, order_text, parse_mode=ParseMode.HTML)
+        order_text = f"<b>Новая заявка:</b>\n{order_text}\n"
 
-    # Подтверждение пользователю
-    await message.reply("Ваша заявка принята и отправлена!")
+        if photo_id:
+            await bot.send_photo(
+                GROUP_CHAT_ID, photo_id, caption=order_text, parse_mode=ParseMode.HTML
+            )
+        else:
+            await bot.send_message(GROUP_CHAT_ID, order_text, parse_mode=ParseMode.HTML)
+
+        await message.reply(
+            "✅ Ваша заявка обрабатывается!\n\n"
+            "Вы можете продолжить выбирать товары в каталоге: https://a.wsxc.cn/ItS5XIV",
+        )
+
+
+async def main():
+    await dp.start_polling(bot)
 
 
 if __name__ == "__main__":
-    executor.start_polling(dp, skip_updates=True)
+    asyncio.run(main())
