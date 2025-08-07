@@ -68,8 +68,14 @@ async def get_product(message: types.Message, state: FSMContext):
     user_id = message.from_user.id
     user_data[user_id] = {"name": data["name"], "contact": data["contact"]}
 
-    product_text = message.text if message.text else "[Фото товара]"
-    await state.update_data(product=product_text)
+    if message.photo:
+        # Сохраняем file_id фото (берем фото с лучшим качеством - последнее в массиве)
+        photo_file_id = message.photo[-1].file_id
+        await state.update_data(product="[Фото товара]", photo_file_id=photo_file_id)
+    else:
+        # Если это текст (ссылка на товар)
+        await state.update_data(product=message.text, photo_file_id=None)
+    
     await state.set_state(OrderForm.extra)
     await message.reply(
         "✏️ Напишите дополнительные вопросы (если есть) или отправьте '/skip' для завершения:"
@@ -93,7 +99,17 @@ async def get_extra(message: types.Message, state: FSMContext):
         f"✏️ {extra_text}"
     )
 
-    await bot.send_message(GROUP_CHAT_ID, order_text, parse_mode=ParseMode.HTML)
+    # Если есть фото, отправляем его с подписью, иначе отправляем только текст
+    if data.get('photo_file_id'):
+        await bot.send_photo(
+            GROUP_CHAT_ID, 
+            photo=data['photo_file_id'], 
+            caption=order_text, 
+            parse_mode=ParseMode.HTML
+        )
+    else:
+        await bot.send_message(GROUP_CHAT_ID, order_text, parse_mode=ParseMode.HTML)
+    
     keyboard = InlineKeyboardMarkup(
         inline_keyboard=[
             [
