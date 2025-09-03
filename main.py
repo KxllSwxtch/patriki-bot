@@ -1,6 +1,7 @@
 import os
 import logging
 import asyncio
+import re
 from aiogram import Bot, Dispatcher, types, F
 from aiogram.enums import ParseMode
 from aiogram.client.default import DefaultBotProperties
@@ -50,14 +51,55 @@ async def start_order(message: types.Message, state: FSMContext):
 
 @dp.message(OrderForm.name)
 async def get_name(message: types.Message, state: FSMContext):
-    await state.update_data(name=message.text)
+    name = message.text.strip()
+    
+    # Проверяем, что имя содержит минимум 2 слова (имя и фамилия)
+    if len(name.split()) < 2:
+        await message.reply(
+            "❌ Пожалуйста, введите полное имя и фамилию (минимум 2 слова).\n"
+            "Например: Иван Иванов"
+        )
+        return
+    
+    # Проверяем, что имя не слишком короткое
+    if len(name) < 5:
+        await message.reply("❌ Имя слишком короткое. Пожалуйста, введите полное имя и фамилию.")
+        return
+    
+    await state.update_data(name=name)
     await state.set_state(OrderForm.contact)
-    await message.reply("📞 Введите ваш номер Telegram или WhatsApp:")
+    await message.reply("📞 Введите ваш номер Telegram или WhatsApp (начиная с + и кода страны):")
 
 
 @dp.message(OrderForm.contact)
 async def get_contact(message: types.Message, state: FSMContext):
-    await state.update_data(contact=message.text)
+    contact = message.text.strip()
+    
+    # Проверяем формат номера телефона
+    # Принимаем форматы: +7xxxxxxxxxx, 8xxxxxxxxxx, или @username
+    phone_pattern = r'^(\+\d{10,15}|8\d{10}|@[a-zA-Z0-9_]{5,})$'
+    
+    # Убираем пробелы, дефисы и скобки для проверки
+    cleaned_contact = re.sub(r'[\s\-\(\)]', '', contact)
+    
+    if not cleaned_contact:
+        await message.reply("❌ Номер телефона не может быть пустым. Пожалуйста, введите номер.")
+        return
+    
+    # Проверяем, что это либо номер телефона, либо username
+    if not (cleaned_contact.startswith('+') or cleaned_contact.startswith('8') or cleaned_contact.startswith('@')):
+        await message.reply(
+            "❌ Неверный формат. Введите номер телефона с кодом страны (+7...) "
+            "или ваш Telegram username (@username)"
+        )
+        return
+    
+    # Минимальная длина для номера телефона
+    if cleaned_contact.startswith(('+', '8')) and len(cleaned_contact) < 11:
+        await message.reply("❌ Номер телефона слишком короткий. Введите полный номер с кодом страны.")
+        return
+    
+    await state.update_data(contact=contact)
     await state.set_state(OrderForm.product)
     await message.reply("📌 Отправьте ссылку на товар или прикрепите скриншот:")
 
@@ -66,7 +108,15 @@ async def get_contact(message: types.Message, state: FSMContext):
 async def get_product(message: types.Message, state: FSMContext):
     data = await state.get_data()
     user_id = message.from_user.id
-    user_data[user_id] = {"name": data["name"], "contact": data["contact"]}
+    
+    # Получаем username пользователя
+    username = f"@{message.from_user.username}" if message.from_user.username else f"ID: {user_id}"
+    
+    user_data[user_id] = {
+        "name": data["name"], 
+        "contact": data["contact"],
+        "username": username
+    }
 
     if message.photo:
         # Сохраняем file_id фото (берем фото с лучшим качеством - последнее в массиве)
@@ -91,12 +141,17 @@ async def get_extra(message: types.Message, state: FSMContext):
     )
     data = await state.get_data()
 
+    # Получаем username из сохраненных данных пользователя
+    user_id = message.from_user.id
+    username = user_data.get(user_id, {}).get('username', f"ID: {user_id}")
+    
     order_text = (
         f"<b>Новая заявка:</b>\n"
-        f"👤 {data['name']}\n"
-        f"📞 {data['contact']}\n"
-        f"📌 {data['product']}\n"
-        f"✏️ {extra_text}"
+        f"👤 <b>Имя:</b> {data['name']}\n"
+        f"📱 <b>Telegram:</b> {username}\n"
+        f"📞 <b>Контакт:</b> {data['contact']}\n"
+        f"📌 <b>Товар:</b> {data['product']}\n"
+        f"✏️ <b>Доп. инфо:</b> {extra_text}"
     )
 
     # Если есть фото, отправляем его с подписью, иначе отправляем только текст
@@ -126,11 +181,30 @@ async def get_extra(message: types.Message, state: FSMContext):
 
 @dp.callback_query(F.data == "repeat_order")
 async def repeat_order(callback_query: types.CallbackQuery, state: FSMContext):
-    await state.set_state(OrderForm.product)
-    await bot.send_message(
-        callback_query.from_user.id,
-        "📌 Отправьте ссылку на товар или прикрепите скриншот:",
-    )
+    user_id = callback_query.from_user.id
+    
+    # Проверяем, есть ли сохраненные данные пользователя
+    if user_id in user_data:
+        # Восстанавливаем имя и контакт из предыдущей заявки
+        await state.update_data(
+            name=user_data[user_id]["name"],
+            contact=user_data[user_id]["contact"]
+        )
+        await state.set_state(OrderForm.product)
+        await bot.send_message(
+            callback_query.from_user.id,
+            f"✅ Используем ваши данные из предыдущей заявки:\n"
+            f"👤 {user_data[user_id]['name']}\n"
+            f"📞 {user_data[user_id]['contact']}\n\n"
+            f"📌 Отправьте ссылку на товар или прикрепите скриншот:",
+        )
+    else:
+        # Если данных нет, начинаем заново
+        await state.set_state(OrderForm.name)
+        await bot.send_message(
+            callback_query.from_user.id,
+            "👤 Введите ваше имя и фамилию:",
+        )
 
 
 async def main():
